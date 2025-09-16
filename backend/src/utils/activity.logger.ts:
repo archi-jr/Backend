@@ -1,0 +1,57 @@
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+export class ActivityLogger {
+  static async log(
+    action: string,
+    userId: string | null,
+    details: any,
+    ipAddress?: string,
+    userAgent?: string
+  ): Promise<void> {
+    try {
+      await prisma.activityLog.create({
+        data: {
+          action,
+          userId,
+          details,
+          ipAddress,
+          userAgent
+        }
+      });
+    } catch (error) {
+      console.error('Failed to log activity:', error);
+    }
+  }
+
+  static async getRecentActivities(userId?: string, limit: number = 50): Promise<any[]> {
+    const where = userId ? { userId } : {};
+    
+    return prisma.activityLog.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      include: {
+        user: {
+          select: {
+            email: true,
+            firstName: true,
+            lastName: true
+          }
+        }
+      }
+    });
+  }
+
+  static async cleanupOldLogs(daysToKeep: number = 90): Promise<void> {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
+
+    await prisma.activityLog.deleteMany({
+      where: {
+        createdAt: { lt: cutoffDate }
+      }
+    });
+  }
+}
