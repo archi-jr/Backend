@@ -1,0 +1,887 @@
+// This is your Prisma schema file for Xeno Shopify Integration
+// Multi-tenant architecture with complete Shopify data models
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "fullTextIndex", "jsonProtocol"]
+  binaryTargets   = ["native", "windows"]
+}
+
+datasource db {
+  provider          = "mysql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+  relationMode      = "prisma"
+}
+
+// ==========================================
+// MULTI-TENANCY & AUTHENTICATION MODELS
+// ==========================================
+
+model Tenant {
+  id                String    @id @default(uuid())
+  tenantId          String    @unique // Unique identifier for the tenant
+  companyName       String
+  domain            String?   @unique // Custom domain if any
+  shopifyDomain     String    @unique // mystore.myshopify.com
+  shopifyAccessToken String   @db.Text // Encrypted
+  shopifyApiKey     String?  @db.Text // Encrypted
+  shopifyApiSecret  String?  @db.Text // Encrypted
+  shopifyWebhookSecret String? @db.Text // For webhook verification
+  
+  // Subscription & Limits
+  subscriptionPlan  SubscriptionPlan @default(FREE)
+  subscriptionStatus SubscriptionStatus @default(TRIAL)
+  maxUsers          Int      @default(5)
+  maxOrders         Int      @default(1000)
+  maxProducts       Int      @default(100)
+  dataRetentionDays Int      @default(90)
+  
+  // Metadata
+  isActive          Boolean  @default(true)
+  isDeleted         Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastSyncAt        DateTime?
+  deletedAt         DateTime?
+  
+  // Shopify App Installation
+  shopifyAppInstalled Boolean @default(false)
+  shopifyScopes     String?  @db.Text // Comma-separated scopes
+  shopifySessionToken String? @db.Text
+  shopifyNonce      String?  // For OAuth
+  
+  // Settings
+  settings          Json?    @db.Json
+  features          Json?    @db.Json // Feature flags
+  webhooksEnabled   Boolean  @default(true)
+  autoSyncEnabled   Boolean  @default(true)
+  syncInterval      Int      @default(3600) // In seconds
+  
+  // Relations
+  users             User[]
+  customers         Customer[]
+  products          Product[]
+  orders            Order[]
+  webhooks          Webhook[]
+  webhookLogs       WebhookLog[]
+  syncLogs          SyncLog[]
+  auditLogs         AuditLog[]
+  sessions          Session[]
+  apiKeys           ApiKey[]
+  notifications     Notification[]
+  dashboards        Dashboard[]
+  reports           Report[]
+  customEvents      CustomEvent[]
+  abandonedCarts    AbandonedCart[]
+  checkouts         Checkout[]
+  collections       Collection[]
+  inventoryItems    InventoryItem[]
+  locations         Location[]
+  fulfillments      Fulfillment[]
+  refunds           Refund[]
+  discounts         Discount[]
+  priceRules        PriceRule[]
+  marketingEvents   MarketingEvent[]
+  pages             Page[]
+  blogs             Blog[]
+  metafields        Metafield[]
+  
+  @@index([tenantId])
+  @@index([shopifyDomain])
+  @@index([isActive, isDeleted])
+  @@index([createdAt])
+  @@map("tenants")
+}
+
+model User {
+  id               String    @id @default(uuid())
+  tenantId         String
+  email            String
+  password         String    // Hashed with bcrypt
+  firstName        String?
+  lastName         String?
+  fullName         String?
+  avatar           String?
+  phone            String?
+  
+  // Role & Permissions
+  role             UserRole  @default(VIEWER)
+  permissions      Json?     @db.Json // Custom permissions
+  
+  // Status
+  isActive         Boolean   @default(true)
+  isEmailVerified  Boolean   @default(false)
+  isDeleted        Boolean   @default(false)
+  isTwoFactorEnabled Boolean @default(false)
+  
+  // Authentication
+  emailVerificationToken String?
+  emailVerificationExpiry DateTime?
+  passwordResetToken String?
+  passwordResetExpiry DateTime?
+  twoFactorSecret  String?
+  lastLoginAt      DateTime?
+  lastLoginIp      String?
+  failedLoginAttempts Int    @default(0)
+  lockedUntil      DateTime?
+  
+  // Metadata
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  sessions         Session[]
+  auditLogs        AuditLog[]
+  notifications    Notification[]
+  apiKeys          ApiKey[]
+  dashboards       Dashboard[]
+  reports          Report[]
+  
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([email])
+  @@index([role])
+  @@index([isActive, isDeleted])
+  @@map("users")
+}
+
+model Session {
+  id               String    @id @default(uuid())
+  tenantId         String
+  userId           String
+  token            String    @unique @db.Text
+  refreshToken     String?   @unique @db.Text
+  
+  // Session Data
+  ipAddress        String?
+  userAgent        String?   @db.Text
+  deviceType       String?
+  deviceId         String?
+  location         String?
+  
+  // Expiry
+  expiresAt        DateTime
+  refreshExpiresAt DateTime?
+  lastActivityAt   DateTime  @default(now())
+  
+  // Status
+  isActive         Boolean   @default(true)
+  revokedAt        DateTime?
+  revokedReason    String?
+  
+  // Metadata
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([userId])
+  @@index([token])
+  @@index([refreshToken])
+  @@index([expiresAt])
+  @@index([isActive])
+  @@map("sessions")
+}
+
+// ==========================================
+// SHOPIFY CORE MODELS
+// ==========================================
+
+model Customer {
+  id                 String    @id @default(uuid())
+  tenantId           String
+  shopifyCustomerId  String
+  
+  // Basic Info
+  email              String?
+  phone              String?
+  firstName          String?
+  lastName           String?
+  displayName        String?
+  
+  // Address
+  addressLine1       String?
+  addressLine2       String?
+  city               String?
+  province           String?
+  country            String?
+  zip                String?
+  
+  // Customer Data
+  acceptsMarketing   Boolean   @default(false)
+  acceptsMarketingUpdatedAt DateTime?
+  currency           String?
+  locale             String?
+  note               String?   @db.Text
+  tags               String?   @db.Text // Comma-separated
+  
+  // Stats
+  ordersCount        Int       @default(0)
+  totalSpent         Decimal   @default(0) @db.Decimal(15, 2)
+  averageOrderValue  Decimal   @default(0) @db.Decimal(15, 2)
+  lifetimeValue      Decimal   @default(0) @db.Decimal(15, 2)
+  
+  // Shopify Metadata
+  shopifyCreatedAt   DateTime?
+  shopifyUpdatedAt   DateTime?
+  verifiedEmail      Boolean   @default(false)
+  taxExempt          Boolean   @default(false)
+  marketingOptInLevel String?
+  smsMarketingConsent Json?    @db.Json
+  
+  // Status
+  state              String?   // enabled, disabled, invited, declined
+  isDeleted          Boolean   @default(false)
+  
+  // Metadata
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  lastOrderAt        DateTime?
+  lastActivityAt     DateTime?
+  
+  // Custom Fields
+  customAttributes   Json?     @db.Json
+  metafields         Json?     @db.Json
+  
+  // Relations
+  tenant             Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  orders             Order[]
+  abandonedCarts     AbandonedCart[]
+  checkouts          Checkout[]
+  customEvents       CustomEvent[]
+  addresses          CustomerAddress[]
+  
+  @@unique([tenantId, shopifyCustomerId])
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@index([shopifyCustomerId])
+  @@index([email])
+  @@index([totalSpent])
+  @@index([ordersCount])
+  @@index([createdAt])
+  @@fulltext([firstName, lastName, email])
+  @@map("customers")
+}
+
+model CustomerAddress {
+  id               String    @id @default(uuid())
+  tenantId         String
+  customerId       String
+  
+  // Address Details
+  addressLine1     String
+  addressLine2     String?
+  city             String
+  province         String?
+  provinceCode     String?
+  country          String
+  countryCode      String?
+  zip              String?
+  
+  // Contact
+  firstName        String?
+  lastName         String?
+  company          String?
+  phone            String?
+  
+  // Flags
+  isDefault        Boolean   @default(false)
+  
+  // Metadata
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  // Relations
+  customer         Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([customerId])
+  @@map("customer_addresses")
+}
+
+model Product {
+  id                String    @id @default(uuid())
+  tenantId          String
+  shopifyProductId  String
+  
+  // Basic Info
+  title             String
+  handle            String    // URL slug
+  description       String?   @db.Text
+  vendor            String?
+  productType       String?
+  status            String    // active, archived, draft
+  
+  // SEO
+  seoTitle          String?
+  seoDescription    String?   @db.Text
+  
+  // Categorization
+  tags              String?   @db.Text // Comma-separated
+  collections       String?   @db.Text // Collection IDs
+  
+  // Options
+  options           Json?     @db.Json // Size, Color, etc.
+  
+  // Media
+  featuredImage     String?   @db.Text
+  images            Json?     @db.Json
+  
+  // Pricing (Default Variant)
+  price             Decimal?  @db.Decimal(15, 2)
+  compareAtPrice    Decimal?  @db.Decimal(15, 2)
+  cost              Decimal?  @db.Decimal(15, 2)
+  
+  // Inventory
+  totalInventory    Int       @default(0)
+  totalVariants     Int       @default(1)
+  tracksInventory   Boolean   @default(true)
+  
+  // Stats
+  viewCount         Int       @default(0)
+  salesCount        Int       @default(0)
+  revenue           Decimal   @default(0) @db.Decimal(15, 2)
+  
+  // Shopify Metadata
+  shopifyCreatedAt  DateTime?
+  shopifyUpdatedAt  DateTime?
+  publishedAt       DateTime?
+  publishedScope    String?   // web, global, etc.
+  
+  // Status
+  isDeleted         Boolean   @default(false)
+  
+  // Metadata
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  // Custom Fields
+  customAttributes  Json?     @db.Json
+  metafields        Json?     @db.Json
+  
+  // Relations
+  tenant            Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  variants          ProductVariant[]
+  orderItems        OrderItem[]
+  inventoryItems    InventoryItem[]
+  
+  @@unique([tenantId, shopifyProductId])
+  @@unique([tenantId, handle])
+  @@index([tenantId])
+  @@index([shopifyProductId])
+  @@index([status])
+  @@index([vendor])
+  @@index([productType])
+  @@index([createdAt])
+  @@fulltext([title, description, tags])
+  @@map("products")
+}
+
+model ProductVariant {
+  id                String    @id @default(uuid())
+  tenantId          String
+  productId         String
+  shopifyVariantId  String
+  
+  // Basic Info
+  title             String
+  sku               String?
+  barcode           String?
+  position          Int       @default(1)
+  
+  // Pricing
+  price             Decimal   @db.Decimal(15, 2)
+  compareAtPrice    Decimal?  @db.Decimal(15, 2)
+  cost              Decimal?  @db.Decimal(15, 2)
+  
+  // Inventory
+  inventoryQuantity Int       @default(0)
+  inventoryPolicy   String?   // deny, continue
+  inventoryManagement String? // shopify, null
+  fulfillmentService String?  // manual, api
+  
+  // Physical Properties
+  weight            Decimal?  @db.Decimal(10, 2)
+  weightUnit        String?   // g, kg, lb, oz
+  height            Decimal?  @db.Decimal(10, 2)
+  width             Decimal?  @db.Decimal(10, 2)
+  length            Decimal?  @db.Decimal(10, 2)
+  dimensionUnit     String?   // cm, m, in, ft
+  
+  // Options
+  option1           String?
+  option2           String?
+  option3           String?
+  
+  // Tax & Shipping
+  requiresShipping  Boolean   @default(true)
+  taxable           Boolean   @default(true)
+  taxCode           String?
+  
+  // Media
+  imageId           String?
+  imageSrc          String?   @db.Text
+  
+  // Metadata
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  // Relations
+  product           Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  orderItems        OrderItem[]
+  
+  @@unique([tenantId, shopifyVariantId])
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@index([productId])
+  @@index([shopifyVariantId])
+  @@index([sku])
+  @@map("product_variants")
+}
+
+model Order {
+  id                String    @id @default(uuid())
+  tenantId          String
+  shopifyOrderId    String
+  
+  // Order Info
+  orderNumber       String
+  name              String    // #1001
+  email             String?
+  phone             String?
+  
+  // Customer
+  customerId        String?
+  customerNote      String?   @db.Text
+  
+  // Financial
+  currency          String
+  subtotalPrice     Decimal   @db.Decimal(15, 2)
+  totalTax          Decimal   @default(0) @db.Decimal(15, 2)
+  totalDiscount     Decimal   @default(0) @db.Decimal(15, 2)
+  totalShipping     Decimal   @default(0) @db.Decimal(15, 2)
+  totalPrice        Decimal   @db.Decimal(15, 2)
+  totalOutstanding  Decimal   @default(0) @db.Decimal(15, 2)
+  
+  // Status
+  financialStatus   String?   // pending, authorized, paid, refunded, voided
+  fulfillmentStatus String?   // fulfilled, partial, unfulfilled, restocked
+  orderStatus       OrderStatus @default(PENDING)
+  cancelReason      String?
+  cancelledAt       DateTime?
+  
+  // Checkout
+  checkoutId        String?
+  checkoutToken     String?
+  cartToken         String?
+  
+  // Source
+  sourceName        String?   // web, pos, iphone, android
+  sourceIdentifier  String?
+  sourceUrl         String?   @db.Text
+  landingSite       String?   @db.Text
+  referringSite     String?   @db.Text
+  
+  // Processing
+  processedAt       DateTime?
+  closedAt          DateTime?
+  
+  // Shipping
+  shippingAddressLine1 String?
+  shippingAddressLine2 String?
+  shippingCity      String?
+  shippingProvince  String?
+  shippingCountry   String?
+  shippingZip       String?
+  shippingLatitude  Decimal?  @db.Decimal(10, 8)
+  shippingLongitude Decimal?  @db.Decimal(11, 8)
+  
+  // Billing
+  billingAddressLine1 String?
+  billingAddressLine2 String?
+  billingCity       String?
+  billingProvince   String?
+  billingCountry    String?
+  billingZip        String?
+  
+  // Payment
+  paymentGateway    String?
+  paymentMethod     String?
+  
+  // Flags
+  test              Boolean   @default(false)
+  confirmed         Boolean   @default(true)
+  buyerAcceptsMarketing Boolean @default(false)
+  
+  // Shopify Metadata
+  shopifyCreatedAt  DateTime?
+  shopifyUpdatedAt  DateTime?
+  
+  // Tags & Notes
+  tags              String?   @db.Text
+  noteAttributes    Json?     @db.Json
+  
+  // Risk
+  riskLevel         String?   // low, medium, high
+  riskScore         Decimal?  @db.Decimal(5, 2)
+  
+  // Metadata
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  // Custom Fields
+  customAttributes  Json?     @db.Json
+  metafields        Json?     @db.Json
+  taxLines          Json?     @db.Json
+  shippingLines     Json?     @db.Json
+  discountCodes     Json?     @db.Json
+  
+  // Relations
+  tenant            Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  customer          Customer? @relation(fields: [customerId], references: [id])
+  orderItems        OrderItem[]
+  fulfillments      Fulfillment[]
+  refunds           Refund[]
+  transactions      Transaction[]
+  
+  @@unique([tenantId, shopifyOrderId])
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([shopifyOrderId])
+  @@index([orderStatus])
+  @@index([financialStatus])
+  @@index([fulfillmentStatus])
+  @@index([createdAt])
+  @@index([processedAt])
+  @@fulltext([email, tags])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                String    @id @default(uuid())
+  tenantId          String
+  orderId           String
+  productId         String?
+  variantId         String?
+  
+  // Item Info
+  shopifyLineItemId String
+  title             String
+  variantTitle      String?
+  sku               String?
+  vendor            String?
+  
+  // Quantity & Pricing
+  quantity          Int
+  price             Decimal   @db.Decimal(15, 2)
+  totalDiscount     Decimal   @default(0) @db.Decimal(15, 2)
+  linePrice         Decimal   @db.Decimal(15, 2) // price * quantity - discount
+  
+  // Fulfillment
+  fulfillableQuantity Int     @default(0)
+  fulfillmentStatus String?   // fulfilled, partial, null
+  fulfillmentService String?
+  
+  // Tax
+  taxable           Boolean   @default(true)
+  taxLines          Json?     @db.Json
+  
+  // Flags
+  giftCard          Boolean   @default(false)
+  requiresShipping  Boolean   @default(true)
+  
+  // Properties
+  properties        Json?     @db.Json // Custom line item properties
+  
+  // Metadata
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  
+  // Relations
+  order             Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product           Product?  @relation(fields: [productId], references: [id])
+  variant           ProductVariant? @relation(fields: [variantId], references: [id])
+  
+  @@index([tenantId])
+  @@index([orderId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+// ==========================================
+// CUSTOM EVENTS & ANALYTICS
+// ==========================================
+
+model CustomEvent {
+  id               String    @id @default(uuid())
+  tenantId         String
+  
+  // Event Info
+  eventType        EventType
+  eventName        String
+  eventCategory    String?
+  
+  // Related Entities
+  customerId       String?
+  orderId          String?
+  productId        String?
+  cartToken        String?
+  checkoutToken    String?
+  
+  // Event Data
+  eventData        Json      @db.Json
+  
+  // Session Info
+  sessionId        String?
+  ipAddress        String?
+  userAgent        String?   @db.Text
+  deviceType       String?
+  
+  // UTM Parameters
+  utmSource        String?
+  utmMedium        String?
+  utmCampaign      String?
+  utmTerm          String?
+  utmContent       String?
+  
+  // Metadata
+  timestamp        DateTime  @default(now())
+  processedAt      DateTime?
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  
+  @@index([tenantId])
+  @@index([eventType])
+  @@index([customerId])
+  @@index([timestamp])
+  @@index([cartToken])
+  @@index([checkoutToken])
+  @@map("custom_events")
+}
+
+model AbandonedCart {
+  id               String    @id @default(uuid())
+  tenantId         String
+  
+  // Cart Info
+  cartToken        String
+  checkoutToken    String?
+  
+  // Customer
+  customerId       String?
+  email            String?
+  phone            String?
+  
+  // Cart Data
+  itemCount        Int       @default(0)
+  totalPrice       Decimal   @db.Decimal(15, 2)
+  currency         String
+  cartData         Json      @db.Json // Full cart details
+  
+  // Recovery
+  recoveryEmailSent Boolean  @default(false)
+  recoveryEmailSentAt DateTime?
+  recovered        Boolean   @default(false)
+  recoveredAt      DateTime?
+  recoveredOrderId String?
+  
+  // Timestamps
+  abandonedAt      DateTime
+  lastActivityAt   DateTime
+  expiresAt        DateTime // For cleanup
+  
+  // Source
+  sourceName       String?
+  landingSite      String?   @db.Text
+  referringSite    String?   @db.Text
+  
+  // Metadata
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  
+  @@unique([tenantId, cartToken])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([cartToken])
+  @@index([checkoutToken])
+  @@index([abandonedAt])
+  @@index([recovered])
+  @@map("abandoned_carts")
+}
+
+model Checkout {
+  id               String    @id @default(uuid())
+  tenantId         String
+  
+  // Checkout Info
+  checkoutToken    String
+  cartToken        String?
+  
+  // Customer
+  customerId       String?
+  email            String?
+  phone            String?
+  
+  // Status
+  completedAt      DateTime?
+  status           CheckoutStatus @default(STARTED)
+  
+  // Steps Completed
+  emailEntered     Boolean   @default(false)
+  shippingEntered  Boolean   @default(false)
+  billingEntered   Boolean   @default(false)
+  shippingMethodSelected Boolean @default(false)
+  paymentMethodSelected Boolean @default(false)
+  
+  // Checkout Data
+  subtotalPrice    Decimal   @db.Decimal(15, 2)
+  totalTax         Decimal   @default(0) @db.Decimal(15, 2)
+  totalShipping    Decimal   @default(0) @db.Decimal(15, 2)
+  totalPrice       Decimal   @db.Decimal(15, 2)
+  currency         String
+  
+  // Full Data
+  checkoutData     Json      @db.Json
+  
+  // Timestamps
+  startedAt        DateTime
+  lastActivityAt   DateTime
+  
+  // Metadata
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  customer         Customer? @relation(fields: [customerId], references: [id])
+  
+  @@unique([tenantId, checkoutToken])
+  @@index([tenantId])
+  @@index([customerId])
+  @@index([checkoutToken])
+  @@index([cartToken])
+  @@index([status])
+  @@index([startedAt])
+  @@map("checkouts")
+}
+
+// ==========================================
+// WEBHOOK & SYNC MANAGEMENT
+// ==========================================
+
+model Webhook {
+  id               String    @id @default(uuid())
+  tenantId         String
+  
+  // Webhook Config
+  shopifyWebhookId String?
+  topic            String    // orders/create, products/update, etc.
+  address          String    @db.Text // Callback URL
+  format           String    @default("json") // json, xml
+  apiVersion       String
+  
+  // Status
+  isActive         Boolean   @default(true)
+  
+  // Metadata
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  webhookLogs      WebhookLog[]
+  
+  @@unique([tenantId, topic])
+  @@index([tenantId])
+  @@index([topic])
+  @@index([isActive])
+  @@map("webhooks")
+}
+
+model WebhookLog {
+  id               String    @id @default(uuid())
+  tenantId         String
+  webhookId        String?
+  
+  // Request Info
+  topic            String
+  shopifyWebhookId String?
+  shopifyOrderId   String?
+  shopifyProductId String?
+  shopifyCustomerId String?
+  
+  // Processing
+  status           WebhookStatus @default(PENDING)
+  attempts         Int       @default(0)
+  lastAttemptAt    DateTime?
+  processedAt      DateTime?
+  
+  // Data
+  headers          Json?     @db.Json
+  payload          Json      @db.Json
+  response         Json?     @db.Json
+  
+  // Error Handling
+  error            String?   @db.Text
+  errorCode        String?
+  
+  // Metadata
+  receivedAt       DateTime  @default(now())
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  webhook          Webhook?  @relation(fields: [webhookId], references: [id])
+  
+  @@index([tenantId])
+  @@index([webhookId])
+  @@index([topic])
+  @@index([status])
+  @@index([receivedAt])
+  @@map("webhook_logs")
+}
+
+model SyncLog {
+  id               String    @id @default(uuid())
+  tenantId         String
+  
+  // Sync Info
+  syncType         SyncType  // FULL, INCREMENTAL, WEBHOOK
+  entityType       String    // customers, products, orders
+  
+  // Status
+  status           SyncStatus @default(STARTED)
+  
+  // Stats
+  totalRecords     Int       @default(0)
+  processedRecords Int       @default(0)
+  failedRecords    Int       @default(0)
+  
+  // Timing
+  startedAt        DateTime  @default(now())
+  completedAt      DateTime?
+  duration         Int?      // In seconds
+  
+  // Details
+  details          Json?     @db.Json
+  errors           Json?     @db.Json
+  
+  // Relations
+  tenant           Tenant    @relation(fields: [tenantId], references: [tenantId], onDelete: Cascade)
+  
+  @@index([tenantId])
+  @@index([syncType])
+  @@index([entityType])
