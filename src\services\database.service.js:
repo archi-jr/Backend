@@ -1,0 +1,512 @@
+const { PrismaClient } = require('@prisma/client');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcryptjs');
+
+class DatabaseService {
+  constructor() {
+    this.prisma = new PrismaClient({
+      log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+      errorFormat: 'pretty',
+    });
+    
+    this.pool = null;
+    this.initializePool();
+  }
+
+  // Initialize MySQL connection pool for raw queries
+  async initializePool() {
+    try {
+      this.pool = mysql.createPool({
+        host: process.env.DB_HOST,
+        port: parseInt(process.env.DB_PORT),
+        user: process.env.DB_USER,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME,
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 0,
+      });
+      
+      // Test connection
+      const connection = await this.pool.getConnection();
+      await connection.ping();
+      connection.release();
+      console.log('MySQL connection pool initialized successfully');
+    } catch (error) {
+      console.error('Failed to initialize MySQL pool:', error);
+      throw error;
+    }
+  }
+
+  // Get Prisma instance
+  getPrisma() {
+    return this.prisma;
+  }
+
+  // Execute raw SQL query
+  async executeRawQuery(query, params = []) {
+    try {
+      const [rows] = await this.pool.execute(query, params);
+      return rows;
+    } catch (error) {
+      console.error('Raw query execution failed:', error);
+      throw error;
+    }
+  }
+
+  // Transaction wrapper
+  async executeTransaction(callback) {
+    return await this.prisma.$transaction(callback);
+  }
+
+  // Multi-tenant data isolation helpers
+  getTenantFilter(tenantId) {
+    return { tenantId };
+  }
+
+  // Session management (Redis alternative)
+  async createSession(userId, token, expiresIn = 3600000) {
+    const expiresAt = new Date(Date.now() + expiresIn);
+    
+    return await this.prisma.session.create({
+      data: {
+        userId,
+        token,
+        expiresAt,
+        isActive: true,
+      },
+    });
+  }
+
+  async getSession(token) {
+    const session = await this.prisma.session.findUnique({
+      where: { token },
+      include: {
+        user: {
+          include: {
+            tenant: true,
+          },
+        },
+      },
+    });
+
+    if (!session || !session.isActive || session.expiresAt < new Date()) {
+      return null;
+    }
+
+    // Update session activity
+    await this.prisma.session.update({
+      where: { id: session.id },
+      data: { updatedAt: new Date() },
+    });
+
+    return session;
+  }
+
+  async invalidateSession(token) {
+    return await this.prisma.session.update({
+      where: { token },
+      data: { isActive: false },
+    });
+  }
+
+  async cleanupExpiredSessions() {
+    return await this.prisma.session.deleteMany({
+      where: {
+        OR: [
+          { expiresAt: { lt: new Date() } },
+          { isActive: false },
+        ],
+      },
+    });
+  }
+
+  // Cache management (Redis alternative)
+  async setCache(key, value, tenantId = null, ttl = 3600000) {
+    const expiresAt = new Date(Date.now() + ttl);
+    
+    return await this.prisma.cacheEntry.upsert({
+      where: { key },
+      update: {
+        value,
+        expiresAt,
+        tenantId,
+      },
+      create: {
+        key,
+        value,
+        expiresAt,
+        tenantId,
+      },
+    });
+  }
+
+  async getCache(key) {
+    const entry = await this.prisma.cacheEntry.findUnique({
+      where: { key },
+    });
+
+    if (!entry || entry.expiresAt < new Date()) {
+      if (entry) {
+        await this.prisma.cacheEntry.delete({ where: { key } });
+      }
+      return null;
+    }
+
+    return entry.value;
+  }
+
+  async invalidateCache(pattern) {
+    if (pattern.includes('*')) {
+      const likePattern = pattern.replace('*', '%');
+      return await this.prisma.$executeRaw`
+        DELETE FROM CacheEntry WHERE \`key\` LIKE ${likePattern}
+      `;
+    } else {
+      return await this.prisma.cacheEntry.delete({
+        where: { key: pattern },
+      });
+    }
+  }
+
+  async cleanupExpiredCache() {
+    return await this.prisma.cacheEntry.deleteMany({
+      where: {
+        expiresAt: { lt: new Date() },
+      },
+    });
+  }
+
+  // Analytics queries
+  async getAnalyticsSummary(tenantId, dateRange = {}) {
+    const { startDate, endDate } = dateRange;
+    
+    // Try to get from cache first
+    const cacheKey = `analytics_${tenantId}_${startDate}_${endDate}`;
+    const cached = await this.getCache(cacheKey);
+    if (cached) return cached;
+
+    // Build date filter
+    const dateFilter = {};
+    if (startDate) dateFilter.gte = new Date(startDate);
+    if (endDate) dateFilter.lte = new Date(endDate);
+
+    // Execute parallel queries
+    const [
+      customerStats,
+      orderStats,
+      revenueStats,
+      topCustomers,
+      orderTrends,
+    ] = await Promise.all([
+      // Customer statistics
+      this.prisma.customer.aggregate({
+        where: { tenantId },
+        _count: true,
+      }),
+      
+      // Order statistics
+      this.prisma.order.aggregate({
+        where: {
+          tenantId,
+          ...(dateFilter.gte || dateFilter.lte ? { processedAt: dateFilter } : {}),
+        },
+        _count: true,
+        _sum: { totalPrice: true },
+        _avg: { totalPrice: true },
+      }),
+      
+      // Revenue by status
+      this.prisma.order.groupBy({
+        by: ['financialStatus'],
+        where: {
+          tenantId,
+          ...(dateFilter.gte || dateFilter.lte ? { processedAt: dateFilter } : {}),
+        },
+        _sum: { totalPrice: true },
+        _count: true,
+      }),
+      
+      // Top customers
+      this.executeRawQuery(`
+        SELECT 
+          c.id,
+          c.email,
+          c.firstName,
+          c.lastName,
+          c.totalSpent,
+          c.ordersCount,
+          COUNT(o.id) as recentOrders,
+          SUM(o.totalPrice) as recentSpent
+        FROM Customer c
+        LEFT JOIN \`Order\` o ON c.id = o.customerId
+          AND o.processedAt >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        WHERE c.tenantId = ?
+        GROUP BY c.id
+        ORDER BY c.totalSpent DESC
+        LIMIT 5
+      `, [tenantId]),
+      
+      // Order trends
+      this.executeRawQuery(`
+        SELECT 
+          DATE(processedAt) as date,
+          COUNT(*) as orderCount,
+          SUM(totalPrice) as revenue,
+          AVG(totalPrice) as avgOrderValue
+        FROM \`Order\`
+        WHERE tenantId = ?
+          ${startDate ? 'AND processedAt >= ?' : ''}
+          ${endDate ? 'AND processedAt <= ?' : ''}
+        GROUP BY DATE(processedAt)
+        ORDER BY date DESC
+        LIMIT 30
+      `, [tenantId, ...(startDate ? [startDate] : []), ...(endDate ? [endDate] : [])]),
+    ]);
+
+    const result = {
+      customers: {
+        total: customerStats._count,
+      },
+      orders: {
+        total: orderStats._count,
+        totalRevenue: orderStats._sum.totalPrice || 0,
+        averageOrderValue: orderStats._avg.totalPrice || 0,
+      },
+      revenueByStatus: revenueStats,
+      topCustomers,
+      orderTrends,
+      generatedAt: new Date(),
+    };
+
+    // Cache the result
+    await this.setCache(cacheKey, result, tenantId, 300000); // 5 minutes
+
+    return result;
+  }
+
+  // Custom event analytics
+  async getCustomEventAnalytics(tenantId, eventType = null) {
+    const where = { tenantId };
+    if (eventType) where.eventType = eventType;
+
+    const [events, eventCounts] = await Promise.all([
+      this.prisma.customEvent.findMany({
+        where,
+        orderBy: { timestamp: 'desc' },
+        take: 100,
+        include: {
+          customer: {
+            select: {
+              email: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      }),
+      
+      this.prisma.customEvent.groupBy({
+        by: ['eventType'],
+        where: { tenantId },
+        _count: true,
+      }),
+    ]);
+
+    // Calculate conversion rates
+    const abandonedCarts = await this.prisma.customEvent.count({
+      where: {
+        tenantId,
+        eventType: 'cart_abandoned',
+        timestamp: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      },
+    });
+
+    const checkoutsStarted = await this.prisma.customEvent.count({
+      where: {
+        tenantId,
+        eventType: 'checkout_started',
+        timestamp: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      },
+    });
+
+    const completedOrders = await this.prisma.order.count({
+      where: {
+        tenantId,
+        processedAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      },
+    });
+
+    return {
+      recentEvents: events,
+      eventCounts,
+      conversionMetrics: {
+        abandonedCarts,
+        checkoutsStarted,
+        completedOrders,
+        cartAbandonmentRate: abandonedCarts > 0 
+          ? ((abandonedCarts - completedOrders) / abandonedCarts * 100).toFixed(2) 
+          : 0,
+        checkoutCompletionRate: checkoutsStarted > 0 
+          ? (completedOrders / checkoutsStarted * 100).toFixed(2) 
+          : 0,
+      },
+    };
+  }
+
+  // Performance optimization - create indexes
+  async createIndexes() {
+    const indexes = [
+      'CREATE INDEX IF NOT EXISTS idx_order_date ON `Order`(processedAt, tenantId)',
+      'CREATE INDEX IF NOT EXISTS idx_customer_spent ON Customer(totalSpent DESC, tenantId)',
+      'CREATE INDEX IF NOT EXISTS idx_event_type_date ON CustomEvent(eventType, timestamp, tenantId)',
+      'CREATE INDEX IF NOT EXISTS idx_session_expiry ON Session(expiresAt, isActive)',
+      'CREATE INDEX IF NOT EXISTS idx_cache_expiry ON CacheEntry(expiresAt)',
+    ];
+
+    for (const index of indexes) {
+      try {
+        await this.executeRawQuery(index);
+        console.log(`Index created: ${index.match(/idx_\w+/)[0]}`);
+      } catch (error) {
+        console.error(`Failed to create index: ${error.message}`);
+      }
+    }
+  }
+
+  // Database health check
+  async healthCheck() {
+    try {
+      // Check Prisma connection
+      await this.prisma.$queryRaw`SELECT 1`;
+      
+      // Check raw connection pool
+      const connection = await this.pool.getConnection();
+      await connection.ping();
+      connection.release();
+      
+      // Get database statistics
+      const [dbStats] = await this.executeRawQuery(`
+        SELECT 
+          table_schema as 'database',
+          ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) as 'size_mb',
+          COUNT(DISTINCT table_name) as 'tables'
+        FROM information_schema.tables
+        WHERE table_schema = ?
+        GROUP BY table_schema
+      `, [process.env.DB_NAME]);
+
+      const [connectionStats] = await this.executeRawQuery('SHOW STATUS LIKE "Threads_connected"');
+      
+      return {
+        status: 'healthy',
+        database: dbStats,
+        connections: {
+          active: parseInt(connectionStats.Value),
+          max: 200,
+        },
+        timestamp: new Date(),
+      };
+    } catch (error) {
+      return {
+        status: 'unhealthy',
+        error: error.message,
+        timestamp: new Date(),
+      };
+    }
+  }
+
+  // Cleanup and maintenance
+  async runMaintenance() {
+    console.log('Starting database maintenance...');
+    
+    try {
+      // Clean expired sessions
+      const deletedSessions = await this.cleanupExpiredSessions();
+      console.log(`Cleaned ${deletedSessions.count} expired sessions`);
+      
+      // Clean expired cache
+      const deletedCache = await this.cleanupExpiredCache();
+      console.log(`Cleaned ${deletedCache.count} expired cache entries`);
+      
+      // Optimize tables
+      const tables = ['Session', 'CacheEntry', 'CustomEvent', 'SyncLog'];
+      for (const table of tables) {
+        await this.executeRawQuery(`OPTIMIZE TABLE \`${table}\``);
+        console.log(`Optimized table: ${table}`);
+      }
+      
+      // Update analytics snapshots
+      await this.updateAnalyticsSnapshots();
+      
+      console.log('Database maintenance completed');
+    } catch (error) {
+      console.error('Database maintenance failed:', error);
+    }
+  }
+
+  // Update analytics snapshots for performance
+  async updateAnalyticsSnapshots() {
+    const tenants = await this.prisma.tenant.findMany({
+      where: { isActive: true },
+    });
+
+    for (const tenant of tenants) {
+      try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const analytics = await this.getAnalyticsSummary(tenant.id);
+        const topCustomers = await this.executeRawQuery(`
+          SELECT id, email, totalSpent 
+          FROM Customer 
+          WHERE tenantId = ? 
+          ORDER BY totalSpent DESC 
+          LIMIT 10
+        `, [tenant.id]);
+
+        await this.prisma.analyticsSnapshot.upsert({
+          where: {
+            tenantId_snapshotDate: {
+              tenantId: tenant.id,
+              snapshotDate: today,
+            },
+          },
+          update: {
+            totalCustomers: analytics.customers.total,
+            totalOrders: analytics.orders.total,
+            totalRevenue: analytics.orders.totalRevenue,
+            avgOrderValue: analytics.orders.averageOrderValue,
+            topCustomers,
+            ordersByStatus: analytics.revenueByStatus,
+          },
+          create: {
+            tenantId: tenant.id,
+            snapshotDate: today,
+            totalCustomers: analytics.customers.total,
+            totalOrders: analytics.orders.total,
+            totalRevenue: analytics.orders.totalRevenue,
+            avgOrderValue: analytics.orders.averageOrderValue,
+            topCustomers,
+            ordersByStatus: analytics.revenueByStatus,
+          },
+        });
+      } catch (error) {
+        console.error(`Failed to update snapshot for tenant ${tenant.id}:`, error);
+      }
+    }
+  }
+
+  // Disconnect database connections
+  async disconnect() {
+    await this.prisma.$disconnect();
+    if (this.pool) {
+      await this.pool.end();
+    }
+  }
+}
+
+// Export singleton instance
+module.exports = new DatabaseService();
