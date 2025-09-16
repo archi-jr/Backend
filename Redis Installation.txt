@@ -1,0 +1,37 @@
+# Download Redis for Windows
+Invoke-WebRequest -Uri "https://github.com/microsoftarchive/redis/releases/download/win-3.2.100/Redis-x64-3.2.100.msi" -OutFile "D:\Xeno App\tools\Redis-x64-3.2.100.msi"
+
+# Install Redis
+Start-Process msiexec.exe -Wait -ArgumentList '/i "D:\Xeno App\tools\Redis-x64-3.2.100.msi" /quiet'
+
+# Create Redis configuration
+@"
+# Redis configuration for Xeno App
+bind 127.0.0.1
+port 6379
+timeout 0
+tcp-keepalive 300
+daemonize no
+supervised no
+pidfile /var/run/redis_6379.pid
+loglevel notice
+logfile ""
+databases 16
+save 900 1
+save 300 10
+save 60 10000
+stop-writes-on-bgsave-error yes
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+dir ./
+maxmemory 256mb
+maxmemory-policy allkeys-lru
+"@ | Out-File -FilePath "D:\Xeno App\redis.conf" -Encoding UTF8
+
+# Start Redis as Windows Service
+redis-server --service-install "D:\Xeno App\redis.conf" --service-name Redis_Xeno
+redis-server --service-start --service-name Redis_Xeno
+
+# Verify Redis
+redis-cli ping  # Should return PONG
