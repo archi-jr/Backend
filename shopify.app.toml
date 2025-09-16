@@ -1,0 +1,139 @@
+# Shopify App Configuration
+# This file is used by Shopify CLI to manage your app
+
+name = "Xeno Shopify Integration"
+client_id = "YOUR_CLIENT_ID_FROM_SHOPIFY"
+
+[access_scopes]
+# Define the access scopes your app needs
+scopes = """
+read_products,
+write_products,
+read_customers,
+write_customers,
+read_orders,
+write_orders,
+read_draft_orders,
+write_draft_orders,
+read_inventory,
+write_inventory,
+read_locations,
+read_merchant_managed_fulfillment_orders,
+write_merchant_managed_fulfillment_orders,
+read_checkouts,
+write_checkouts,
+read_reports,
+write_reports,
+read_price_rules,
+write_price_rules,
+read_discounts,
+write_discounts,
+read_marketing_events,
+write_marketing_events,
+read_resource_feedbacks,
+write_resource_feedbacks,
+read_shopify_payments_payouts,
+read_shopify_payments_disputes,
+read_translations,
+write_translations,
+read_locales,
+write_locales,
+read_shipping,
+write_shipping,
+read_analytics,
+read_users,
+write_users,
+read_publications,
+read_product_listings,
+read_custom_fulfillment_services,
+read_fulfillments,
+write_fulfillments,
+read_assigned_fulfillment_orders,
+write_assigned_fulfillment_orders,
+read_returns,
+read_third_party_fulfillment_orders,
+write_third_party_fulfillment_orders,
+read_own_subscription_contracts,
+read_customer_payment_methods,
+unauthenticated_read_checkouts,
+unauthenticated_write_checkouts,
+unauthenticated_read_customers,
+unauthenticated_write_customers
+"""
+
+[auth]
+redirect_urls = [
+  "http://localhost:5000/auth/callback",
+  "http://localhost:3000/auth/callback",
+  "https://your-production-url.com/auth/callback"
+]
+
+[webhooks]
+api_version = "2024-01"
+
+[[webhooks.subscriptions]]
+topics = [
+  "app/uninstalled",
+  "carts/create",
+  "carts/update",
+  "checkouts/create",
+  "checkouts/update",
+  "checkouts/delete",
+  "collections/create",
+  "collections/update",
+  "collections/delete",
+  "customers/create",
+  "customers/disable",
+  "customers/enable",
+  "customers/update",
+  "customers/delete",
+  "customer_groups/create",
+  "customer_groups/update",
+  "customer_groups/delete",
+  "draft_orders/create",
+  "draft_orders/update",
+  "draft_orders/delete",
+  "fulfillments/create",
+  "fulfillments/update",
+  "inventory_items/create",
+  "inventory_items/update",
+  "inventory_items/delete",
+  "inventory_levels/connect",
+  "inventory_levels/disconnect",
+  "inventory_levels/update",
+  "locations/create",
+  "locations/update",
+  "locations/delete",
+  "orders/cancelled",
+  "orders/create",
+  "orders/delete",
+  "orders/edited",
+  "orders/fulfilled",
+  "orders/paid",
+  "orders/partially_fulfilled",
+  "orders/updated",
+  "order_transactions/create",
+  "products/create",
+  "products/update",
+  "products/delete",
+  "product_listings/add",
+  "product_listings/remove",
+  "product_listings/update",
+  "refunds/create",
+  "shop/update",
+  "themes/create",
+  "themes/delete",
+  "themes/publish",
+  "themes/update",
+  "variants/in_stock",
+  "variants/out_of_stock"
+]
+uri = "/webhooks"
+
+[app_proxy]
+url = "https://your-app-url.com/proxy"
+subpath = "xeno"
+prefix = "apps"
+
+[pos]
+embedded = false
