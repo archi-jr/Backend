@@ -1,0 +1,6 @@
+Shopify Details:
+
+URL: https://admin.shopify.com/store/xeno-development-app?ui_locales=en-IN 
+Admin API Access token: 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
+API key: dcf5a5128ad1862feac977e4db285d39
+API secret key: 6fa55e0e40d9f640148005f42c186649
