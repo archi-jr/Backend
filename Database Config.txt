@@ -1,0 +1,51 @@
+MySQL Setup:
+# Using Chocolatey
+choco install mysql --version=8.0.35 -y
+
+# Alternative: Download MySQL Installer
+Invoke-WebRequest -Uri "https://dev.mysql.com/get/Downloads/MySQLInstaller/mysql-installer-community-8.0.35.0.msi" -OutFile "D:\Xeno App\tools\mysql-installer.msi"
+
+
+MySQL Configuration (Detailed):
+# Start MySQL Service (Command Prompt as Administrator)
+net start MySQL80
+
+# If service doesn't exist, install it:
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqld" --install
+
+# Initialize MySQL (if fresh installation)
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqld" --initialize-insecure --console
+
+# Set root password
+"C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql" -u root
+
+
+SQL Queries:
+-- Set root password
+ALTER USER 'root'@'localhost' IDENTIFIED BY 'XenoRoot@2025';
+
+-- Create application database
+CREATE DATABASE IF NOT EXISTS xeno_shopify_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Create application user with limited privileges
+CREATE USER IF NOT EXISTS 'xeno_user'@'localhost' IDENTIFIED BY 'XenoApp@2025';
+CREATE USER IF NOT EXISTS 'xeno_user'@'%' IDENTIFIED BY 'XenoApp@2025';
+
+-- Grant privileges
+GRANT ALL PRIVILEGES ON xeno_shopify_db.* TO 'xeno_user'@'localhost';
+GRANT ALL PRIVILEGES ON xeno_shopify_db.* TO 'xeno_user'@'%';
+
+-- Create backup user for maintenance
+CREATE USER IF NOT EXISTS 'xeno_backup'@'localhost' IDENTIFIED BY 'XenoBackup@2025';
+GRANT SELECT, LOCK TABLES, SHOW VIEW ON xeno_shopify_db.* TO 'xeno_backup'@'localhost';
+
+-- Flush privileges
+FLUSH PRIVILEGES;
+
+-- Verify users created
+SELECT User, Host FROM mysql.user WHERE User LIKE 'xeno%';
+
+-- Show grants
+SHOW GRANTS FOR 'xeno_user'@'localhost';
+
+EXIT;
