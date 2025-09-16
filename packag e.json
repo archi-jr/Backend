@@ -1,0 +1,68 @@
+{
+  "name": "xeno-shopify-integration",
+  "version": "1.0.0",
+  "description": "Multi-tenant Shopify Data Ingestion & Insights Service",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "build:all": "npm run build:backend && npm run build:frontend",
+    "start:backend": "cd backend && npm start",
+    "start:frontend": "cd frontend && npm start",
+    "start:all": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
+    "test:backend": "cd backend && npm test",
+    "test:frontend": "cd frontend && npm test",
+    "test:all": "npm run test:backend && npm run test:frontend",
+    "lint:backend": "cd backend && npm run lint",
+    "lint:frontend": "cd frontend && npm run lint",
+    "lint:all": "npm run lint:backend && npm run lint:frontend",
+    "format:backend": "cd backend && npm run format",
+    "format:frontend": "cd frontend && npm run format",
+    "format:all": "npm run format:backend && npm run format:frontend",
+    "clean:backend": "cd backend && rimraf dist node_modules .next",
+    "clean:frontend": "cd frontend && rimraf .next node_modules out",
+    "clean:all": "npm run clean:backend && npm run clean:frontend && rimraf node_modules",
+    "prisma:generate": "cd backend && npx prisma generate",
+    "prisma:migrate": "cd backend && npx prisma migrate dev",
+    "prisma:seed": "cd backend && npx prisma db seed",
+    "prisma:studio": "cd backend && npx prisma studio",
+    "setup:shopify": "node scripts/setup-shopify-store.js",
+    "ngrok": "ngrok http 5000",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up",
+    "docker:down": "docker-compose down",
+    "deploy:backend": "cd backend && railway up",
+    "deploy:frontend": "cd frontend && vercel",
+    "deploy:all": "npm run deploy:backend && npm run deploy:frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "rimraf": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/xeno-shopify-integration.git"
+  },
+  "keywords": [
+    "shopify",
+    "multi-tenant",
+    "saas",
+    "ecommerce",
+    "analytics",
+    "dashboard"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
